@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package x509_test
+package x509
 
 import (
 	"crypto/dsa"
@@ -11,6 +11,9 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+
+	"github.com/flyinox/crypto/sm/sm2"
+
 )
 
 func ExampleCertificate_Verify() {
@@ -128,6 +131,8 @@ AIU+2GKjyT3iMuzZxxFxPFMCAwEAAQ==
 		fmt.Println("pub is of type DSA:", pub)
 	case *ecdsa.PublicKey:
 		fmt.Println("pub is of type ECDSA:", pub)
+	case *sm2.PublicKey:
+		fmt.Println("pub is of type ECRDSA:", pub)
 	default:
 		panic("unknown type of public key")
 	}

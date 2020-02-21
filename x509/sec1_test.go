@@ -6,7 +6,9 @@ package x509
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"testing"
 )
 
@@ -24,6 +26,20 @@ var ecKeyTests = []struct {
 	// leading zero byte in the private key that should be present.
 	{"3081db0201010441607b4f985774ac21e633999794542e09312073480baa69550914d6d43d8414441e61b36650567901da714f94dffb3ce0e2575c31928a0997d51df5c440e983ca17a00706052b81040023a181890381860004001661557afedd7ac8d6b70e038e576558c626eb62edda36d29c3a1310277c11f67a8c6f949e5430a37dcfb95d902c1b5b5379c389873b9dd17be3bdb088a4774a7401072f830fb9a08d93bfa50a03dd3292ea07928724ddb915d831917a338f6b0aecfbc3cf5352c4a1295d356890c41c34116d29eeb93779aab9d9d78e2613437740f6", false},
 }
+var ecKeyTests2 = []string{
+	`-----BEGIN PRIVATE KEY-----
+MEMCAQAwHAYGKoUDAgITMBIGByqFAwICIwEGByqFAwICHgEEIOdnohYOLFZwgryA
+NovofEsXdaIKPK4zqDoEBdg/kuj6
+-----END PRIVATE KEY-----`,
+	/*`-----BEGIN PRIVATE KEY-----
+	MEUCAQAwHAYGKoUDAgJiMBIGByqFAwICJAAGByqFAwICHgEEIgQgTxEBlQKd/SoZ
+	gfw0vuVhLIxx2bKaUHp7X5myneC9XXA=
+	-----END PRIVATE KEY-----`,*/
+	`-----BEGIN PRIVATE KEY-----
+MEMCAQAwHAYGKoUDAgITMBIGByqFAwICIwEGByqFAwICHgEEIHYxy84ray2hilk8
+7H3yCwWgk2dVNjujIWEcKiLxtbUv
+-----END PRIVATE KEY-----`,
+}
 
 func TestParseECPrivateKey(t *testing.T) {
 	for i, test := range ecKeyTests {
@@ -39,6 +55,23 @@ func TestParseECPrivateKey(t *testing.T) {
 		matches := bytes.Equal(serialized, derBytes)
 		if matches != test.shouldReserialize {
 			t.Fatalf("#%d: when serializing key: matches=%t, should match=%t: original %x, reserialized %x", i, matches, test.shouldReserialize, serialized, derBytes)
+		}
+	}
+}
+func TestParseECPrivateKey2(t *testing.T) {
+	for i, test := range ecKeyTests2 {
+		blk, _ := pem.Decode([]byte(test))
+		key, err := ParseECPrivateKey(blk.Bytes)
+		if err != nil {
+			t.Fatalf("#%d: failed to decode EC private key: %s", i, err)
+		}
+		serialized, err := MarshalECPrivateKey(key)
+		if err != nil {
+			t.Errorf("#%d: failed to encode EC private key: %s", i, err)
+		}
+		matches := bytes.Equal(serialized, blk.Bytes)
+		if matches != true {
+			t.Errorf("#%d: when serializing key: matches=%t\nOriginal: %v\nReencode: %v", i, matches, base64.StdEncoding.EncodeToString(blk.Bytes), base64.StdEncoding.EncodeToString(serialized))
 		}
 	}
 }

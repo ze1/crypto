@@ -20,6 +20,7 @@ import (
 	"strings"
 )
 
+// PEMCipher - EncryptPEMBlock encryption algorithm
 type PEMCipher int
 
 // Possible values for the EncryptPEMBlock encryption algorithm.
@@ -101,14 +102,14 @@ func IsEncryptedPEMBlock(b *pem.Block) bool {
 	return ok
 }
 
-// IncorrectPasswordError is returned when an incorrect password is detected.
-var IncorrectPasswordError = errors.New("x509: decryption password incorrect")
+// ErrIncorrectPassword is returned when an incorrect password is detected.
+var ErrIncorrectPassword = errors.New("x509: decryption password incorrect")
 
 // DecryptPEMBlock takes a password encrypted PEM block and the password used to
 // encrypt it and returns a slice of decrypted DER encoded bytes. It inspects
 // the DEK-Info header to determine the algorithm used for decryption. If no
 // DEK-Info header is present, an error is returned. If an incorrect password
-// is detected an IncorrectPasswordError is returned. Because of deficiencies
+// is detected an ErrIncorrectPassword is returned. Because of deficiencies
 // in the encrypted-PEM format, it's not always possible to detect an incorrect
 // password. In these cases no error will be returned but the decrypted DER
 // bytes will be random noise.
@@ -164,14 +165,14 @@ func DecryptPEMBlock(b *pem.Block, password []byte) ([]byte, error) {
 	}
 	last := int(data[dlen-1])
 	if dlen < last {
-		return nil, IncorrectPasswordError
+		return nil, ErrIncorrectPassword
 	}
 	if last == 0 || last > ciph.blockSize {
-		return nil, IncorrectPasswordError
+		return nil, ErrIncorrectPassword
 	}
 	for _, val := range data[dlen-last:] {
 		if int(val) != last {
-			return nil, IncorrectPasswordError
+			return nil, ErrIncorrectPassword
 		}
 	}
 	return data[:dlen-last], nil

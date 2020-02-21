@@ -7,11 +7,13 @@ package x509
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	sm "github.com/flyinox/crypto/sm/sm2"
 	"encoding/asn1"
 	"errors"
 	"fmt"
 	"math/big"
+
+	"github.com/flyinox/crypto/sm/sm2"
+	sm "github.com/flyinox/crypto/sm/sm2"
 )
 
 const ecPrivKeyVersion = 1
@@ -38,35 +40,46 @@ func ParseECPrivateKey(der []byte) (interface{}, error) {
 func MarshalECPrivateKey(key interface{}) ([]byte, error) {
 	var curve elliptic.Curve
 	var x, y *big.Int
-	var privateKeyBytes []byte
+	var count int
+	var bytes []byte
 
 	switch key := key.(type) {
 	case *ecdsa.PrivateKey:
-		privateKeyBytes = key.D.Bytes()
+		count = (key.Params().BitSize + 7) >> 3
+		bytes = key.D.Bytes()
 		curve = key.Curve
 		x = key.X
 		y = key.Y
+		oid, ok := oidFromNamedCurve(curve)
+		if !ok {
+			return nil, errors.New("x509: unknown elliptic curve")
+		}
+		return asn1.Marshal(ecPrivateKey{
+			Version:       1,
+			PrivateKey:    PadBytes(bytes, count),
+			NamedCurveOID: oid,
+			PublicKey:     asn1.BitString{Bytes: elliptic.Marshal(curve, x, y)},
+		})
+
 	case *sm.PrivateKey:
-		privateKeyBytes = key.D.Bytes()
+		count = sm2.CurveSize(key.PublicKey.Curve)
+		bytes = key.D.Bytes()
 		curve = key.Curve
 		x = key.X
 		y = key.Y
-	}
-	oid, ok := oidFromNamedCurve(curve)
-	if !ok {
-		return nil, errors.New("x509: unknown elliptic curve")
-	}
+		oid, ok := oidFromNamedCurve(curve)
+		if !ok {
+			return nil, errors.New("x509: unknown elliptic curve")
+		}
+		return asn1.Marshal(ecPrivateKey{
+			Version:       1,
+			PrivateKey:    PadBytes(bytes, count),
+			NamedCurveOID: oid,
+			PublicKey:     asn1.BitString{Bytes: key.PublicKey.Marshal()}, //elliptic.Marshal(curve, x, y)},
+		})
 
-	//privateKeyBytes := key.D.Bytes()
-	paddedPrivateKey := make([]byte, (curve.Params().N.BitLen()+7)/8)
-	copy(paddedPrivateKey[len(paddedPrivateKey)-len(privateKeyBytes):], privateKeyBytes)
-
-	return asn1.Marshal(ecPrivateKey{
-		Version:       1,
-		PrivateKey:    paddedPrivateKey,
-		NamedCurveOID: oid,
-		PublicKey:     asn1.BitString{Bytes: elliptic.Marshal(curve, x, y)},
-	})
+	}
+	return nil, errors.New("x509: unsupported elliptic curve algorithm")
 }
 
 // parseECPrivateKey parses an ASN.1 Elliptic Curve Private Key Structure.
@@ -76,66 +89,36 @@ func MarshalECPrivateKey(key interface{}) ([]byte, error) {
 func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key interface{}, err error) {
 	var privKey ecPrivateKey
 	if _, err := asn1.Unmarshal(der, &privKey); err != nil {
-		return nil, errors.New("x509: failed to parse EC private key: " + err.Error())
-	}
-	if privKey.Version != ecPrivKeyVersion {
-		return nil, fmt.Errorf("x509: unknown EC private key version %d", privKey.Version)
-	}
-
-	var curve elliptic.Curve
-	if namedCurveOID != nil {
-		curve = namedCurveFromOID(*namedCurveOID)
+		if namedCurveOID == nil {
+			return nil, errors.New("ECPK: failed to parse EC private key: " + err.Error())
+		}
 	} else {
-		curve = namedCurveFromOID(privKey.NamedCurveOID)
+		if privKey.Version != ecPrivKeyVersion {
+			return nil, fmt.Errorf("ECPK: unknown EC private key version %d", privKey.Version)
+		}
 	}
-	if curve == nil {
-		return nil, errors.New("x509: unknown elliptic curve")
+	kdata := privKey.PrivateKey
+	if len(kdata) == 0 {
+		kdata = der
 	}
+	k := new(big.Int).SetBytes(kdata)
 
-	k := new(big.Int).SetBytes(privKey.PrivateKey)
-	curveOrder := curve.Params().N
-	if k.Cmp(curveOrder) >= 0 {
-		return nil, errors.New("x509: invalid elliptic curve private key value")
+	var curveOid *asn1.ObjectIdentifier
+	if namedCurveOID != nil {
+		curveOid = namedCurveOID
+	} else {
+		curveOid = &privKey.NamedCurveOID
 	}
+	curveECDSA := namedCurveFromOID(*curveOid)
+	if curveECDSA != nil {
 
-	switch curve {
-	case sm.P256Sm2():
-		k := new(big.Int).SetBytes(privKey.PrivateKey)
-		curveOrder := curve.Params().N
+		curveOrder := curveECDSA.Params().N
 		if k.Cmp(curveOrder) >= 0 {
-			return nil, errors.New("x509: invalid elliptic curve private key value")
-		}
-		priv := new(sm.PrivateKey)
-		priv.Curve = curve
-		priv.D = k
-
-		privateKey := make([]byte, (curveOrder.BitLen()+7)/8)
-
-		// Some private keys have leading zero padding. This is invalid
-		// according to [SEC1], but this code will ignore it.
-		for len(privKey.PrivateKey) > len(privateKey) {
-			if privKey.PrivateKey[0] != 0 {
-				return nil, errors.New("x509: invalid private key length")
-			}
-			privKey.PrivateKey = privKey.PrivateKey[1:]
+			return nil, errors.New("ECPK: invalid elliptic curve private key value")
 		}
 
-		// Some private keys remove all leading zeros, this is also invalid
-		// according to [SEC1] but since OpenSSL used to do this, we ignore
-		// this too.
-		copy(privateKey[len(privateKey)-len(privKey.PrivateKey):], privKey.PrivateKey)
-		priv.X, priv.Y = curve.ScalarBaseMult(privateKey)
-
-		return priv, nil
-
-	case elliptic.P224(), elliptic.P256(), elliptic.P384(), elliptic.P521():
-		k := new(big.Int).SetBytes(privKey.PrivateKey)
-		curveOrder := curve.Params().N
-		if k.Cmp(curveOrder) >= 0 {
-			return nil, errors.New("x509: invalid elliptic curve private key value")
-		}
 		priv := new(ecdsa.PrivateKey)
-		priv.Curve = curve
+		priv.Curve = curveECDSA
 		priv.D = k
 
 		privateKey := make([]byte, (curveOrder.BitLen()+7)/8)
@@ -144,7 +127,7 @@ func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key in
 		// according to [SEC1], but this code will ignore it.
 		for len(privKey.PrivateKey) > len(privateKey) {
 			if privKey.PrivateKey[0] != 0 {
-				return nil, errors.New("x509: invalid private key length")
+				return nil, errors.New("ECPK: invalid private key length")
 			}
 			privKey.PrivateKey = privKey.PrivateKey[1:]
 		}
@@ -153,10 +136,22 @@ func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key in
 		// according to [SEC1] but since OpenSSL used to do this, we ignore
 		// this too.
 		copy(privateKey[len(privateKey)-len(privKey.PrivateKey):], privKey.PrivateKey)
-		priv.X, priv.Y = curve.ScalarBaseMult(privateKey)
+		priv.X, priv.Y = curveECDSA.ScalarBaseMult(privateKey)
 
 		return priv, nil
-	default:
-		return nil, errors.New("x509: invalid private key curve param")
 	}
+
+	// Non-ECDSA curve
+
+	curve, err := sm.NewCurveByOID(curveOid)
+	if err != nil {
+		return nil, fmt.Errorf("ECPK: unknown elliptic curve %v", curveOid)
+	}
+
+	priv, err := sm.NewPrivateKey(curve, kdata)
+	if err != nil {
+		return nil, err
+	}
+
+	return priv, nil
 }
